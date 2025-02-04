@@ -1,0 +1,258 @@
+package handlers
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"time"
+
+	"auth_service/db"
+	"auth_service/logger"
+	"auth_service/utils"
+)
+
+/*
+ \d sysuser.user;
+                                           Table "sysuser.user"
+     Column     |          Type          | Collation | Nullable |                 Default
+----------------+------------------------+-----------+----------+------------------------------------------
+ username       | character varying(30)  |           | not null |
+ full_name      | character varying(128) |           | not null |
+ st             | integer                |           | not null |
+ salt           | character varying(64)  |           | not null |
+ saltedpassword | character varying(128) |           | not null |
+ data           | jsonb                  |           | not null |
+ id             | bigint                 |           | not null | nextval('sysuser.user_id_seq'::regclass)
+ role           | character varying(128) |           | not null |
+Indexes:
+    "user_pkey" PRIMARY KEY, btree (id)
+    "user_unique_name" UNIQUE CONSTRAINT, btree (username)
+Referenced by:
+    TABLE "sysuser.token" CONSTRAINT "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."user"(id) ON DELETE CASCADE
+
+
+
+tubes=> \d sysuser.session;
+                         Table "sysuser.session"
+     Column     |          Type          | Collation | Nullable | Default
+----------------+------------------------+-----------+----------+---------
+ session_id     | character varying(16)  |           | not null |
+ user_id        | bigint                 |           | not null |
+ session_hash   | character varying(128) |           | not null |
+ tstamp         | bigint                 |           | not null |
+ st             | integer                |           | not null |
+ last_ms_tstamp | bigint                 |           |          |
+ last_sequence  | bigint                 |           |          |
+Indexes:
+    "session_pkey" PRIMARY KEY, btree (session_id)
+    "session_user_id_key" UNIQUE CONSTRAINT, btree (user_id)
+
+tubes=*> \d sysuser.token;
+                      Table "sysuser.token"
+ Column  |         Type          | Collation | Nullable | Default
+---------+-----------------------+-----------+----------+---------
+ user_id | bigint                |           | not null |
+ nonce   | character varying(16) |           | not null |
+ tstamp  | bigint                |           | not null |
+Indexes:
+    "token_pkey" PRIMARY KEY, btree (user_id, nonce)
+Foreign-key constraints:
+    "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."user"(id) ON DELETE CASCADE
+*/
+
+// GenerateNonce membuat nonce acak sepanjang 16 byte
+func GenerateNonce() (string, string) {
+	nonce, err := utils.RandomStringGenerator(16)
+	if err != "" {
+		return "", "Failed to generate nonce"
+	}
+	return nonce, ""
+}
+
+func ComputeHMAC(nonce, key string) (string, string) {
+	if nonce == "" || key == "" {
+		return "", "Missing nonce or key"
+	}
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write([]byte(nonce))
+	return hex.EncodeToString(h.Sum(nil)), ""
+}
+
+type UserCred struct {
+	ID             int64  `db:"id"`
+	Salt           string `db:"salt"`
+	SaltedPassword string `db:"saltedpassword"`
+}
+
+type UserDataSession struct {
+	Username    string                 `db:"username"`
+	FullName    string                 `db:"full_name"`
+	Data        map[string]interface{} `db:"data"` // jsonb
+	SessionID   string                 `db:"session_id"`
+	SessionHash string                 `db:"session_hash"`
+}
+
+// !!!NOTE : DONT GIVE ANY DETAILED ERROR MESSAGE TO CLIENT
+
+/*
+1. Query the user table to get the user's id, salt, and saltedpassword.
+
+2. Compute the salted password from the provided password and the retrieved salt.
+
+3. Compare the computed salted password with the stored one. If not equal, return error.
+
+4. Generate a nonce.
+
+5. Store the nonce in the token table with the user_id and current timestamp.
+
+6. Compute HMAC of the nonce using the stored saltedpassword as the key.
+
+7. Generate a session_id (random string).
+
+8. Insert/update the session in the session table with session_id, user_id, session_hash (HMAC result), timestamp, etc.
+
+9. Return the session_id and any other necessary data to the client.
+*/
+func Login(w http.ResponseWriter, r *http.Request) {
+	var ctxKey HTTPContextKey = "requestID"
+	referenceID, ok := r.Context().Value(ctxKey).(string)
+	if !ok {
+		referenceID = "unknown"
+	}
+
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		logger.Debug(referenceID, "DEBUG - Login - Execution completed in ", duration)
+	}()
+
+	result := utils.ResultFormat{
+		ErrorCode:    "000000",
+		ErrorMessage: "",
+		Payload:      make(map[string]any),
+	}
+
+	param, _ := utils.Request(r)
+
+	// Validasi input
+	username, ok := param["username"].(string)
+	if !ok || username == "" {
+		logger.Error(referenceID, "ERROR - Register - Missing username")
+		result.ErrorCode = "400001"
+		result.ErrorMessage = "Invalid request"
+		utils.Response(w, result)
+		return
+	}
+
+	password, ok := param["password"].(string)
+	if !ok || password == "" {
+		logger.Error(referenceID, "ERROR - Register - Missing password")
+		result.ErrorCode = "400003"
+		result.ErrorMessage = "Invalid request"
+		utils.Response(w, result)
+		return
+	}
+
+	// Dapatkan koneksi database
+	conn, err := db.GetConnection()
+	if err != nil {
+		logger.Error(referenceID, "ERROR - Login - DB connection failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Ambil data pengguna
+	var user UserCred
+	queryGetUser := `SELECT id, salt, saltedpassword FROM sysuser.user WHERE username = $1`
+	if err := conn.Get(&user, queryGetUser, username); err != nil {
+		logger.Error(referenceID, "ERROR - Login - User not found")
+		result.ErrorCode = "401000"
+		result.ErrorMessage = "Unauthorized"
+		utils.Response(w, result)
+		return
+	}
+
+	// Validasi password
+	computedPassword, errMsg := GenerateSaltedPassword(password, user.Salt)
+	if errMsg != "" || computedPassword != user.SaltedPassword {
+		logger.Error(referenceID, "ERROR - Login - Password mismatch")
+		result.ErrorCode = "401000"
+		result.ErrorMessage = "Unauthorized"
+		utils.Response(w, result)
+		return
+	}
+
+	// Generate nonce
+	nonce, errMsg := GenerateNonce()
+	if errMsg != "" {
+		logger.Error(referenceID, "ERROR - Login - Nonce generation failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Simpan nonce ke database
+	queryInsertToken := `INSERT INTO sysuser.token (user_id, nonce, tstamp) VALUES ($1, $2, $3)`
+	if _, err := conn.Exec(queryInsertToken, user.ID, nonce, time.Now().Unix()); err != nil {
+		logger.Error(referenceID, "ERROR - Login - Token insertion failed", err)
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Hitung HMAC
+	sessionHash, errMsg := ComputeHMAC(nonce, user.SaltedPassword)
+	if errMsg != "" {
+		logger.Error(referenceID, "ERROR - Login - HMAC computation failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Generate session ID
+	sessionID, errMsg := utils.RandomStringGenerator(16)
+	if errMsg != "" {
+		logger.Error(referenceID, "ERROR - Login - Session ID generation failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Buat/update session
+	currentTime := time.Now().Unix()
+	queryUpsertSession := `
+		INSERT INTO sysuser.session (session_id, user_id, session_hash, tstamp, st)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (user_id) DO UPDATE SET
+			session_id = EXCLUDED.session_id,
+			session_hash = EXCLUDED.session_hash,
+			tstamp = EXCLUDED.tstamp,
+			st = EXCLUDED.st`
+	if _, err := conn.Exec(queryUpsertSession, sessionID, user.ID, sessionHash, currentTime, 1); err != nil {
+		logger.Error(referenceID, "ERROR - Login - Session upsert failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Hapus nonce yang sudah digunakan
+	queryDeleteToken := `DELETE FROM sysuser.token WHERE user_id = $1 AND nonce = $2`
+	if _, err := conn.Exec(queryDeleteToken, user.ID, nonce); err != nil {
+		logger.Warning(referenceID, "WARNING - Login - Token cleanup failed")
+	}
+
+	// Siapkan response
+	result.Payload["session_id"] = sessionID
+	result.Payload["username"] = username
+	result.Payload["session_hash"] = sessionHash
+
+	utils.Response(w, result)
+}

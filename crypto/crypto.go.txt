@@ -1,0 +1,9 @@
+package crypto
+
+func GenerateHMAC(text string, key string) (string, error) {
+
+		
+
+
+
+}

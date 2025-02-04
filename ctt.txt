@@ -1,0 +1,15 @@
+set env 
+//windows : 
+set DBDRIVER=postgres
+set DBHOST=localhost
+set DBUSER=revaananda
+set DBPASS=qwerqwer
+set DBPORT=5432
+
+
+//linux
+export DBDRIVER=postgres
+export DBHOST=localhost
+export DBUSER=revaananda
+export DBPASS=qwerqwer
+
