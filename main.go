@@ -133,6 +133,7 @@ func main() {
 	paths["/login"] = handlers.Login
 	paths["/register"] = handlers.Register
 	paths["/logout"] = handlers.Logout
+	paths["/verify-token"] = handlers.Verify_Token
 
 	// Register endpoints with a multiplexer
 	mux := http.NewServeMux()

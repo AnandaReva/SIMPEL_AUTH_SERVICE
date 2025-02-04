@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 )
+
 func JSONencode(data any) (string, error) {
 	var buffer bytes.Buffer
 	// Buat encoder yang menulis ke buffer
@@ -32,7 +34,6 @@ func GetEnv(key, fallback string) string {
 	return value
 }
 
-
 // format response
 type ResultFormat struct {
 	ErrorCode    string
@@ -40,12 +41,9 @@ type ResultFormat struct {
 	Payload      map[string]any
 }
 
-
-
 func Response(w http.ResponseWriter, result ResultFormat) {
 	// Get the first 3 digits from ErrorCode (e.g., "500003" -> "500")
 	var httpErrCode int
-	
 
 	if len(result.ErrorCode) >= 3 {
 		// Extract the first 3 digits of the ErrorCode
@@ -87,7 +85,26 @@ func Request(r *http.Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Build the log string for parameters
+	var logParams []string
+	for key, value := range data {
+		// Format the value as a string (use quotes for string values)
+		var formattedValue string
+		switch v := value.(type) {
+		case string:
+			formattedValue = fmt.Sprintf("\"%s\"", v) // Quote string values
+		default:
+			formattedValue = fmt.Sprintf("%v", v) // For other types, just use the default format
+		}
+
+		// Append to the log array
+		logParams = append(logParams, fmt.Sprintf("%s : %s", key, formattedValue))
+	}
+
+	// Join all parameters into a single string
+	logMessage := fmt.Sprintf("INFO - Received parameters: [%s]", strings.Join(logParams, ", "))
+	logger.Info("Request", logMessage)
+
 	return data, nil
 }
-
-

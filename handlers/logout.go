@@ -29,7 +29,7 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
-	logger.Info(referenceID, "INFO - Logout - param:  ", param)
+	//logger.Info(referenceID, "INFO - Logout - param:  ", param)
 	// Validasi input
 	sessionId, ok := param["session_id"].(string)
 	if !ok || sessionId == "" {

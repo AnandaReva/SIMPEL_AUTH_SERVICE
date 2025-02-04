@@ -33,7 +33,7 @@ func GenerateSaltedPassword(password string, salt string) (string, string) {
 }
 
 // GenerateHMAC membuat HMAC-SHA256 dari teks menggunakan kunci tertentu
-func GenerateHMAC(text string, key string) (string, string) {
+/* func GenerateHMAC(text string, key string) (string, string) {
 	if text == "" || key == "" {
 		return "", "Missing Text or Key"
 	}
@@ -41,7 +41,7 @@ func GenerateHMAC(text string, key string) (string, string) {
 	h := hmac.New(sha256.New, []byte(key))
 	h.Write([]byte(text))
 	return hex.EncodeToString(h.Sum(nil)), ""
-}
+} */
 
 /*
 {

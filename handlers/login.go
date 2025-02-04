@@ -1,20 +1,19 @@
 package handlers
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"time"
 
+	"auth_service/crypto"
 	"auth_service/db"
 	"auth_service/logger"
 	"auth_service/utils"
 )
 
 /*
- \d sysuser.userCred;
-                                           Table "sysuser.userCred"
+ \d sysuser.user;
+                                           Table "sysuser.user"
      Column     |          Type          | Collation | Nullable |                 Default
 ----------------+------------------------+-----------+----------+------------------------------------------
  username       | character varying(30)  |           | not null |
@@ -48,35 +47,27 @@ Indexes:
     "session_pkey" PRIMARY KEY, btree (session_id)
     "session_user_id_key" UNIQUE CONSTRAINT, btree (user_id)
 
-tubes=*> \d sysuser.token;
+\d sysuser.token;
                       Table "sysuser.token"
  Column  |         Type          | Collation | Nullable | Default
 ---------+-----------------------+-----------+----------+---------
  user_id | bigint                |           | not null |
- nonce   | character varying(16) |           | not null |
+ token   | character varying(16) |           | not null |
  tstamp  | bigint                |           | not null |
 Indexes:
-    "token_pkey" PRIMARY KEY, btree (user_id, nonce)
+    "token_pkey" PRIMARY KEY, btree (user_id, token)
+    "unique_user_id" UNIQUE CONSTRAINT, btree (user_id)
 Foreign-key constraints:
-    "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."userCred"(id) ON DELETE CASCADE
+    "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."user"(id) ON DELETE CASCADE
 */
 
-// GenerateNonce membuat nonce acak sepanjang 16 byte
+// GenerateNonce membuat nonce acak sepanjang 8 byte
 func GenerateNonce() (string, string) {
-	nonce, err := utils.RandomStringGenerator(16)
+	nonce, err := utils.RandomStringGenerator(8)
 	if err != "" {
 		return "", "Failed to generate nonce"
 	}
 	return nonce, ""
-}
-
-func ComputeHMAC(nonce, key string) (string, string) {
-	if nonce == "" || key == "" {
-		return "", "Missing nonce or key"
-	}
-	h := hmac.New(sha256.New, []byte(key))
-	h.Write([]byte(nonce))
-	return hex.EncodeToString(h.Sum(nil)), ""
 }
 
 type UserCred struct {
@@ -85,34 +76,19 @@ type UserCred struct {
 	SaltedPassword string `db:"saltedpassword"`
 }
 
-type UserDataSession struct {
+/* type UserData struct {
 	Username    string                 `db:"username"`
 	FullName    string                 `db:"full_name"`
 	Data        map[string]interface{} `db:"data"` // jsonb
 	SessionID   string                 `db:"session_id"`
 	SessionHash string                 `db:"session_hash"`
 }
+*/
 
 // !!!NOTE : DONT GIVE ANY DETAILED ERROR MESSAGE TO CLIENT
 
 /*
-1. Query the userCred table to get the userCred's id, salt, and saltedpassword.
-
-2. Compute the salted password from the provided password and the retrieved salt.
-
-3. Compare the computed salted password with the stored one. If not equal, return error.
-
-4. Generate a nonce.
-
-5. Store the nonce in the token table with the user_id and current timestamp.
-
-6. Compute HMAC of the nonce using the stored saltedpassword as the key.
-
-7. Generate a session_id (random string).
-
-8. Insert/update the session in the session table with session_id, user_id, session_hash (HMAC result), timestamp, etc.
-
-9. Return the session_id and any other necessary data to the client.
+### Langkah-langkah Login dengan Verifikasi Token
 */
 func Login(w http.ResponseWriter, r *http.Request) {
 	var ctxKey HTTPContextKey = "requestID"
@@ -135,12 +111,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
-	logger.Info(referenceID, "INFO - Login - param:  ", param)
-
-	// Validasi input
 	username, ok := param["username"].(string)
 	if !ok || username == "" {
-		logger.Error(referenceID, "ERROR - Register - Missing username")
+		logger.Error(referenceID, "ERROR - Login - Missing username")
 		result.ErrorCode = "400001"
 		result.ErrorMessage = "Invalid request"
 		utils.Response(w, result)
@@ -149,87 +122,177 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	password, ok := param["password"].(string)
 	if !ok || password == "" {
-		logger.Error(referenceID, "ERROR - Register - Missing password")
+		logger.Error(referenceID, "ERROR - Login - Missing password")
 		result.ErrorCode = "400003"
 		result.ErrorMessage = "Invalid request"
 		utils.Response(w, result)
 		return
 	}
 
-	// Dapatkan koneksi database
+	halfNonce, ok := param["half_nonce"].(string)
+	if !ok || len(halfNonce) < 8 {
+		logger.Error(referenceID, "ERROR - Login - Missing half_nonce")
+		result.ErrorCode = "400004"
+		result.ErrorMessage = "Invalid request"
+		utils.Response(w, result)
+		return
+	}
+
 	conn, err := db.GetConnection()
 	if err != nil {
-		logger.Error(referenceID, "ERROR - Login - DB connection failed")
+		logger.Error(referenceID, "ERROR - Login - DB connection failed", err)
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
 		return
 	}
 
-	// Ambil data pengguna
 	var userCred UserCred
 	queryGetUser := `SELECT id, salt, saltedpassword FROM sysuser.user WHERE username = $1`
 	if err := conn.Get(&userCred, queryGetUser, username); err != nil {
-		logger.Error(referenceID, "ERROR - Login - User not found")
+		logger.Error(referenceID, "ERROR - Login - User not found: ", err)
 		result.ErrorCode = "401000"
 		result.ErrorMessage = "Unauthorized"
 		utils.Response(w, result)
 		return
 	}
 
-	// Validasi password
-	computedPassword, errMsg := GenerateSaltedPassword(password, userCred.Salt)
-	if errMsg != "" || computedPassword != userCred.SaltedPassword {
-		logger.Error(referenceID, "ERROR - Login - Password mismatch")
+	halfNonce2, errHNC2 := GenerateNonce()
+
+	fullNonce := halfNonce + halfNonce2
+	token, errTkn := crypto.GenerateHMAC(userCred.SaltedPassword, fullNonce)
+
+	if errHNC2 != "" || errTkn != "" {
+		logger.Error(referenceID, "ERROR - Login - GenerateNonce or GenerateHMAC token failed generation failed", errTkn, errHNC2)
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	logger.Info(referenceID, "INFO - Login - fullNonce:", fullNonce)
+	logger.Info(referenceID, "INFO - Login - token:", token)
+
+	queryUpsertToken := `
+		INSERT INTO sysuser.token (user_id, token, tstamp) 
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) 
+		DO UPDATE SET token = EXCLUDED.token, tstamp = EXCLUDED.tstamp`
+	if _, err := conn.Exec(queryUpsertToken, userCred.ID, token, time.Now().Unix()); err != nil {
+		logger.Error(referenceID, "ERROR - Login - Token upsert failed", err)
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	result.Payload["full_nonce"] = fullNonce
+	result.Payload["salt"] = userCred.Salt
+	utils.Response(w, result)
+}
+
+/*
+	CLIENT SIDE AFTER LOGIN
+	1. get full_nonce and salt
+	2. client will need to craft token with full_nonce, salt and password -> token = hmac(SaltedPassword , fullNonce)
+	3. send token verify-token to be verified
+
+*/
+
+type UserData struct {
+	Username string          `db:"username"`
+	FullName string          `db:"full_name"`
+	Data     json.RawMessage `db:"data"` // jsonb
+}
+
+func Verify_Token(w http.ResponseWriter, r *http.Request) {
+	var ctxKey HTTPContextKey = "requestID"
+	referenceID, ok := r.Context().Value(ctxKey).(string)
+	if !ok {
+		referenceID = "unknown"
+	}
+
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		logger.Debug(referenceID, "DEBUG - VerifyToken - Execution completed in", duration)
+	}()
+
+	result := utils.ResultFormat{
+		ErrorCode:    "000000",
+		ErrorMessage: "",
+		Payload:      make(map[string]any),
+	}
+
+	param, _ := utils.Request(r)
+	tokenClient, ok := param["token"].(string)
+	if !ok || tokenClient == "" {
+		logger.Error(referenceID, "ERROR - VerifyToken - Invalid token")
+		result.ErrorCode = "400001"
+		result.ErrorMessage = "Invalid request"
+		utils.Response(w, result)
+		return
+	}
+
+	conn, err := db.GetConnection()
+	if err != nil {
+		logger.Error(referenceID, "ERROR - VerifyToken - DB connection failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	var userID int64
+	var storedToken string
+	var tokenCreatedStamp int64
+	queryGetToken := `SELECT user_id, token, tstamp FROM sysuser.token WHERE token = $1`
+	err = conn.QueryRow(queryGetToken, tokenClient).Scan(&userID, &storedToken, &tokenCreatedStamp)
+	if err != nil {
+		logger.Error(referenceID, "ERROR - VerifyToken - Invalid token", err)
 		result.ErrorCode = "401000"
 		result.ErrorMessage = "Unauthorized"
 		utils.Response(w, result)
 		return
 	}
 
-	// Generate nonce
-	nonce, errMsg := GenerateNonce()
-	if errMsg != "" {
-		logger.Error(referenceID, "ERROR - Login - Nonce generation failed")
-		result.ErrorCode = "500000"
-		result.ErrorMessage = "Internal server error"
+	//check time for validation
+	timeForValidation := time.Now().Unix() - tokenCreatedStamp
+	logger.Info(referenceID, "ERROR - VerifyToken - Time for validation (s): ", timeForValidation)
+	if timeForValidation > 100 { // Token expiry period (e.g., 100 seconds)
+		logger.Error(referenceID, "ERROR - VerifyToken - Token Expired (> )")
+		result.ErrorCode = "401000"
+		result.ErrorMessage = "Unauthorized"
 		utils.Response(w, result)
 		return
 	}
 
-	// Simpan nonce ke database
-	queryInsertToken := `INSERT INTO sysuser.token (user_id, nonce, tstamp) VALUES ($1, $2, $3)`
-	logger.Info(referenceID, "INFO - Login - queryInsertToken:  ", queryInsertToken)
-
-	if _, err := conn.Exec(queryInsertToken, userCred.ID, nonce, time.Now().Unix()); err != nil {
-		logger.Error(referenceID, "ERROR - Login - Token insertion failed", err)
-		result.ErrorCode = "500000"
-		result.ErrorMessage = "Internal server error"
-		utils.Response(w, result)
-		return
+	// Delete token after validation
+	queryDeleteToken := `DELETE FROM sysuser.token WHERE user_id = $1 AND token = $2`
+	if _, err := conn.Exec(queryDeleteToken, userID, tokenClient); err != nil {
+		logger.Warning(referenceID, "WARNING - VerifyToken - Token cleanup failed", err)
 	}
 
-	// Hitung HMAC
-	sessionHash, errMsg := ComputeHMAC(nonce, userCred.SaltedPassword)
-	if errMsg != "" {
-		logger.Error(referenceID, "ERROR - Login - HMAC computation failed")
-		result.ErrorCode = "500000"
-		result.ErrorMessage = "Internal server error"
-		utils.Response(w, result)
-		return
-	}
-
-	// Generate session ID
+	// Generate session ID and session hash
 	sessionID, errMsg := utils.RandomStringGenerator(16)
 	if errMsg != "" {
-		logger.Error(referenceID, "ERROR - Login - Session ID generation failed")
+		logger.Error(referenceID, "ERROR - VerifyToken - Session ID generation failed")
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
 		return
 	}
 
-	// Buat/update session
+	sessionHash, errMsg := crypto.GenerateHMAC(tokenClient, sessionID)
+	if errMsg != "" {
+		logger.Error(referenceID, "ERROR - VerifyToken - HMAC computation failed")
+		result.ErrorCode = "500000"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// Create or update session
 	currentTime := time.Now().Unix()
 	queryUpsertSession := `
 		INSERT INTO sysuser.session (session_id, user_id, session_hash, tstamp, st)
@@ -240,26 +303,31 @@ func Login(w http.ResponseWriter, r *http.Request) {
 			tstamp = EXCLUDED.tstamp,
 			st = EXCLUDED.st`
 
-	logger.Info(referenceID, "INFO - Login - queryUpsertSession:  ", queryUpsertSession)
-	if _, err := conn.Exec(queryUpsertSession, sessionID, userCred.ID, sessionHash, currentTime, 1); err != nil {
-		logger.Error(referenceID, "ERROR - Login - Session upsert failed")
+	if _, err := conn.Exec(queryUpsertSession, sessionID, userID, sessionHash, currentTime, 1); err != nil {
+		logger.Error(referenceID, "ERROR - VerifyToken - Session upsert failed")
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
 		return
 	}
 
-	// Hapus nonce yang sudah digunakan
-	queryDeleteToken := `DELETE FROM sysuser.token WHERE user_id = $1 AND nonce = $2`
-	logger.Info(referenceID, "INFO - Login - queryDeleteToken:  ", queryDeleteToken)
-	if _, err := conn.Exec(queryDeleteToken, userCred.ID, nonce); err != nil {
-		logger.Warning(referenceID, "WARNING - Login - Token cleanup failed")
+	// Fetch user data
+	var userData UserData
+	queryGetUserData := `SELECT username, full_name, COALESCE(data, '{}'::jsonb) AS data FROM sysuser.user WHERE id = $1`
+	if err := conn.Get(&userData, queryGetUserData, userID); err != nil {
+		logger.Error(referenceID, "ERROR - VerifyToken - User not found", err)
+		result.ErrorCode = "401000"
+		result.ErrorMessage = "Unauthorized"
+		utils.Response(w, result)
+		return
 	}
 
-	// Siapkan response
+	// Prepare response payload
 	result.Payload["session_id"] = sessionID
-	result.Payload["username"] = username
 	result.Payload["session_hash"] = sessionHash
+	result.Payload["username"] = userData.Username
+	result.Payload["full_name"] = userData.FullName
+	result.Payload["data"] = userData.Data
 
 	utils.Response(w, result)
 }
