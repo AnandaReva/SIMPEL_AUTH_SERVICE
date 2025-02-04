@@ -13,8 +13,8 @@ import (
 )
 
 /*
- \d sysuser.user;
-                                           Table "sysuser.user"
+ \d sysuser.userCred;
+                                           Table "sysuser.userCred"
      Column     |          Type          | Collation | Nullable |                 Default
 ----------------+------------------------+-----------+----------+------------------------------------------
  username       | character varying(30)  |           | not null |
@@ -29,7 +29,7 @@ Indexes:
     "user_pkey" PRIMARY KEY, btree (id)
     "user_unique_name" UNIQUE CONSTRAINT, btree (username)
 Referenced by:
-    TABLE "sysuser.token" CONSTRAINT "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."user"(id) ON DELETE CASCADE
+    TABLE "sysuser.token" CONSTRAINT "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."userCred"(id) ON DELETE CASCADE
 
 
 
@@ -58,7 +58,7 @@ tubes=*> \d sysuser.token;
 Indexes:
     "token_pkey" PRIMARY KEY, btree (user_id, nonce)
 Foreign-key constraints:
-    "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."user"(id) ON DELETE CASCADE
+    "fk_user_id" FOREIGN KEY (user_id) REFERENCES sysuser."userCred"(id) ON DELETE CASCADE
 */
 
 // GenerateNonce membuat nonce acak sepanjang 16 byte
@@ -96,7 +96,7 @@ type UserDataSession struct {
 // !!!NOTE : DONT GIVE ANY DETAILED ERROR MESSAGE TO CLIENT
 
 /*
-1. Query the user table to get the user's id, salt, and saltedpassword.
+1. Query the userCred table to get the userCred's id, salt, and saltedpassword.
 
 2. Compute the salted password from the provided password and the retrieved salt.
 
@@ -135,6 +135,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
+	logger.Info(referenceID, "INFO - Login - param:  ", param)
+
 	// Validasi input
 	username, ok := param["username"].(string)
 	if !ok || username == "" {
@@ -165,9 +167,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ambil data pengguna
-	var user UserCred
+	var userCred UserCred
 	queryGetUser := `SELECT id, salt, saltedpassword FROM sysuser.user WHERE username = $1`
-	if err := conn.Get(&user, queryGetUser, username); err != nil {
+	if err := conn.Get(&userCred, queryGetUser, username); err != nil {
 		logger.Error(referenceID, "ERROR - Login - User not found")
 		result.ErrorCode = "401000"
 		result.ErrorMessage = "Unauthorized"
@@ -176,8 +178,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validasi password
-	computedPassword, errMsg := GenerateSaltedPassword(password, user.Salt)
-	if errMsg != "" || computedPassword != user.SaltedPassword {
+	computedPassword, errMsg := GenerateSaltedPassword(password, userCred.Salt)
+	if errMsg != "" || computedPassword != userCred.SaltedPassword {
 		logger.Error(referenceID, "ERROR - Login - Password mismatch")
 		result.ErrorCode = "401000"
 		result.ErrorMessage = "Unauthorized"
@@ -197,7 +199,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// Simpan nonce ke database
 	queryInsertToken := `INSERT INTO sysuser.token (user_id, nonce, tstamp) VALUES ($1, $2, $3)`
-	if _, err := conn.Exec(queryInsertToken, user.ID, nonce, time.Now().Unix()); err != nil {
+	logger.Info(referenceID, "INFO - Login - queryInsertToken:  ", queryInsertToken)
+
+	if _, err := conn.Exec(queryInsertToken, userCred.ID, nonce, time.Now().Unix()); err != nil {
 		logger.Error(referenceID, "ERROR - Login - Token insertion failed", err)
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
@@ -206,7 +210,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hitung HMAC
-	sessionHash, errMsg := ComputeHMAC(nonce, user.SaltedPassword)
+	sessionHash, errMsg := ComputeHMAC(nonce, userCred.SaltedPassword)
 	if errMsg != "" {
 		logger.Error(referenceID, "ERROR - Login - HMAC computation failed")
 		result.ErrorCode = "500000"
@@ -235,7 +239,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 			session_hash = EXCLUDED.session_hash,
 			tstamp = EXCLUDED.tstamp,
 			st = EXCLUDED.st`
-	if _, err := conn.Exec(queryUpsertSession, sessionID, user.ID, sessionHash, currentTime, 1); err != nil {
+
+	logger.Info(referenceID, "INFO - Login - queryUpsertSession:  ", queryUpsertSession)
+	if _, err := conn.Exec(queryUpsertSession, sessionID, userCred.ID, sessionHash, currentTime, 1); err != nil {
 		logger.Error(referenceID, "ERROR - Login - Session upsert failed")
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
@@ -245,7 +251,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	// Hapus nonce yang sudah digunakan
 	queryDeleteToken := `DELETE FROM sysuser.token WHERE user_id = $1 AND nonce = $2`
-	if _, err := conn.Exec(queryDeleteToken, user.ID, nonce); err != nil {
+	logger.Info(referenceID, "INFO - Login - queryDeleteToken:  ", queryDeleteToken)
+	if _, err := conn.Exec(queryDeleteToken, userCred.ID, nonce); err != nil {
 		logger.Warning(referenceID, "WARNING - Login - Token cleanup failed")
 	}
 

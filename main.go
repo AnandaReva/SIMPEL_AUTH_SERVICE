@@ -63,7 +63,9 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		// Log completion and duration
 		duration := time.Since(start)
-		logger.Info("[%s] --- Handle Request Completed in: %s", requestID, duration)
+		logger.Info(requestID, " Handle Request Completed in: ", duration)
+		logger.Info(requestID, " ----------------------------------------------")
+
 	})
 }
 
@@ -86,7 +88,7 @@ func main() {
 
 	DBPOOLSIZE, err := strconv.Atoi(os.Getenv("DBPOOLSIZE"))
 	if err != nil {
-		logger.Error("MAIN", "Failed to parse DBPOOLSIZE, using default (20)", err)
+		logger.Warning("MAIN", "Failed to parse DBPOOLSIZE, using default (20)", err)
 		DBPOOLSIZE = 20 // Default to 20 if parsing fails
 	}
 
