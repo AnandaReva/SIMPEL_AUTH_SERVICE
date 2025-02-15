@@ -5,11 +5,10 @@ import (
 	"auth_service/handlers"
 	"auth_service/logger"
 	"auth_service/utils"
-	"context"
-	"os"
 
+	"context"
 	"net/http"
-	//"os"
+	"os"
 	"strconv"
 	"time"
 )
@@ -82,7 +81,7 @@ func main() {
 	DBPASS := os.Getenv("DBPASS")
 	DBPORT, err := strconv.Atoi(os.Getenv("DBPORT"))
 	if err != nil {
-		logger.Error("MAIN", "Failed to parse DBPORT, using default (5432)", err)
+		logger.Error("MAIN", "Failed to parse DBPORT, using default (5432), reason: ", err)
 		DBPORT = 5432 // Default to 5432 if parsing fails
 	}
 
@@ -122,7 +121,7 @@ func main() {
 
 	err = db.InitDB(DBDRIVER, DBHOST, DBPORT, DBUSER, DBPASS, DBNAME, DBPOOLSIZE)
 	if err != nil {
-		logger.Error("MAIN", "!!! FAILED TO INITIATE DB POOL..", err)
+		logger.Error("MAIN", "ERROR !!! FAILED TO INITIATE DB POOL..", err)
 		os.Exit(1)
 	} else {
 		logger.Info("MAIN", "Database Connection Pool Initated.")
@@ -143,8 +142,8 @@ func main() {
 
 	// Start server
 	port := ":5000"
-	logger.Info("Starting server on port", port)
+	logger.Info("INFO", "Starting server on http://localhost", port)
 	if err := http.ListenAndServe(port, corsMiddleware(mux)); err != nil {
-		logger.Error("Server failed: ", err)
+		logger.Error("MAIN", "Server failed: ", err)
 	}
 }

@@ -1,53 +1,19 @@
 package handlers
 
 import (
+	"auth_service/crypto"
 	"auth_service/db"
 	"auth_service/logger"
 	"auth_service/utils"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"time"
 )
 
-// MakeSalt menghasilkan salt acak sepanjang 16 karakter
-func MakeSalt() (string, string) {
-	salt, err := utils.RandomStringGenerator(16)
-	if err != "" {
-		return "", "Failed to create salt"
-	}
-	return salt, ""
-}
-
-// GenerateSaltedPassword membuat hash password dengan salt menggunakan HMAC-SHA256
-func GenerateSaltedPassword(password string, salt string) (string, string) {
-	if password == "" || salt == "" {
-		return "", "Missing Password or Salt"
-	}
-
-	key := []byte(salt)
-	h := hmac.New(sha256.New, key)
-	h.Write([]byte(password))
-	return hex.EncodeToString(h.Sum(nil)), ""
-}
-
-// GenerateHMAC membuat HMAC-SHA256 dari teks menggunakan kunci tertentu
-/* func GenerateHMAC(text string, key string) (string, string) {
-	if text == "" || key == "" {
-		return "", "Missing Text or Key"
-	}
-
-	h := hmac.New(sha256.New, []byte(key))
-	h.Write([]byte(text))
-	return hex.EncodeToString(h.Sum(nil)), ""
-} */
-
 /*
 {
-    "username" : "master",
-    "full_name" : "Master User",
-    "password" : "master123"
+	"username" : "master",
+	"full_name" : "Master User",
+	"password" : "master123"
 }
 */
 
@@ -96,7 +62,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	password, ok := param["password"].(string)
-	if !ok || password == "" {
+	if !ok || password == "" || len(password) < 8 {
 		logger.Error(referenceID, "ERROR - Register - Missing password")
 		result.ErrorCode = "400003"
 		result.ErrorMessage = "Invalid request"
@@ -104,8 +70,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Buat Salt
-	salt, errSalt := MakeSalt()
+	salt, errSalt := utils.RandomStringGenerator(16)
 	if errSalt != "" {
 		logger.Error(referenceID, "ERROR - Register - Failed to generate salt: ", errSalt)
 		result.ErrorCode = "500000"
@@ -114,10 +79,9 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Info(referenceID, "INFO - Register - Salt generated:", salt)
-
-	// Buat Salted Password
-	saltedPassword, errSaltedPass := GenerateSaltedPassword(password, salt)
+	//text string, key string, len int, memory int, iterations int
+	saltedPassword, errSaltedPass := crypto.GeneratePBKDF2(password, salt, 32, 5000)
+	logger.Info(referenceID, "INFO - Register - Salted password generated")
 	if errSaltedPass != "" {
 		logger.Error(referenceID, "ERROR - Register - Failed to generate salted password: ", errSaltedPass)
 		result.ErrorCode = "500001"
@@ -126,7 +90,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Info(referenceID, "INFO - Register - Salted password generated")
+	logger.Info(referenceID, "INFO - Register - Salt generated:", salt)
+	logger.Info(referenceID, "INFO - Register - Salted password generated:", saltedPassword)
 
 	// Ambil koneksi database
 	conn, err := db.GetConnection()
@@ -161,9 +126,9 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	// Query untuk menyimpan user
 	queryToRegister := `
-	INSERT INTO sysuser.user (username, full_name, st, salt, saltedpassword, data, role) 
-	VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
-`
+			INSERT INTO sysuser.user (username, full_name, st, salt, saltedpassword, data, role)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id;
+		`
 
 	var newUserId int
 	err = conn.Get(&newUserId, queryToRegister, username, fullName, 1, salt, saltedPassword, "{}", "guest")
@@ -185,5 +150,3 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	utils.Response(w, result)
 }
-
-// writeJSONResponse menulis response dalam format JSON

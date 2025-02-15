@@ -46,6 +46,12 @@ func Greeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path != "/" {
+		res := "Not Found"
+		fmt.Fprint(w, res)
+		return
+	}
+
 	// Penanganan untuk metode GET
 	if r.Method == http.MethodGet {
 		res := "Hello!"
@@ -96,7 +102,6 @@ func Greeting(w http.ResponseWriter, r *http.Request) {
 	} else {
 		response["message"] = "Hello, " + req.Name + "!"
 	}
-	response["reference_id"] = referenceID
 
 	// Encode response ke JSON dan kirimkan
 	res, _ = utils.JSONencode(response)

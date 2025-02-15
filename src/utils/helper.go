@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -25,13 +24,6 @@ func JSONencode(data any) (string, error) {
 	// Mendapatkan hasil JSON sebagai string
 	jsonString := buffer.String()
 	return jsonString, nil
-}
-func GetEnv(key, fallback string) string {
-	value := os.Getenv(key)
-	if len(value) == 0 {
-		return fallback
-	}
-	return value
 }
 
 // format response
@@ -69,9 +61,19 @@ func Response(w http.ResponseWriter, result ResultFormat) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpErrCode)
 
-	// Encode the result as JSON and send it in the response body
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	// Encode the result as JSON using the JSONencode function
+	jsonString, err := JSONencode(result)
+	if err != nil {
+		// Handle the error if JSON encoding fails
 		logger.Error("Unknown", "ERROR - Response encoding failed: ", err)
+		return
+	}
+
+	// Write the encoded JSON string to the response body
+	_, err = w.Write([]byte(jsonString))
+	if err != nil {
+		// Handle writing error
+		logger.Error("Unknown", "ERROR - Failed to write response: ", err)
 	}
 }
 

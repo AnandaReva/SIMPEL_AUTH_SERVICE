@@ -2,10 +2,10 @@ set env
 //windows : 
 set DBDRIVER=postgres
 set DBHOST=localhost
-set DBUSER=user
-set DBPASS=pass
+set DBUSER=revaananda
+set DBPASS=qwerqwer
 set DBPORT=5432
-set DBNAME=tubes
+set DBNAME=simple
 
 
 //linux
@@ -13,7 +13,7 @@ export DBDRIVER=postgres
 export DBHOST=localhost
 export DBUSER=user
 export DBPASS=pass
-export DBNAME=tubes
+export DBNAME=simple
 
 
 

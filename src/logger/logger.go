@@ -33,8 +33,8 @@ func getLogPrefix() string {
 	timestrs[0] = tstr[:29]
 	timestr = strings.Join(timestrs, "+")
 
-	version := configs.GetAppName()
 	appName := configs.GetVersion()
+	version := configs.GetAppName()
 
 	// Retrieve caller information
 	funcName := ""

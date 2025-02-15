@@ -140,7 +140,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := db.GetConnection()
 	if err != nil {
-		logger.Error(referenceID, "ERROR - Login - DB connection failed", err)
+		logger.Error(referenceID, "ERROR - Login - DB connection failed: ", err)
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
@@ -194,7 +194,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 /*
 	CLIENT SIDE AFTER LOGIN
 	1. get full_nonce and salt
-	2. client will need to craft token with full_nonce, salt and password -> token = hmac(SaltedPassword , fullNonce)
+	2. client will need to craft token with full_nonce, salt and password -> token = hmac-sha256(SaltedPassword , fullNonce) , saltedPassword = argon2(password, salt)
 	3. send token verify-token to be verified
 
 */
@@ -202,6 +202,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 type UserData struct {
 	Username string          `db:"username"`
 	FullName string          `db:"full_name"`
+	Role     string          `db:"role"`
 	Data     json.RawMessage `db:"data"` // jsonb
 }
 
@@ -227,7 +228,7 @@ func Verify_Token(w http.ResponseWriter, r *http.Request) {
 	param, _ := utils.Request(r)
 	tokenClient, ok := param["token"].(string)
 	if !ok || tokenClient == "" {
-		logger.Error(referenceID, "ERROR - VerifyToken - Invalid token")
+		logger.Error(referenceID, "ERROR - VerifyToken - Missing token")
 		result.ErrorCode = "400001"
 		result.ErrorMessage = "Invalid request"
 		utils.Response(w, result)
@@ -313,7 +314,7 @@ func Verify_Token(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch user data
 	var userData UserData
-	queryGetUserData := `SELECT username, full_name, COALESCE(data, '{}'::jsonb) AS data FROM sysuser.user WHERE id = $1`
+	queryGetUserData := `SELECT username, full_name, role, COALESCE(data, '{}'::jsonb) AS data FROM sysuser.user WHERE id = $1`
 	if err := conn.Get(&userData, queryGetUserData, userID); err != nil {
 		logger.Error(referenceID, "ERROR - VerifyToken - User not found", err)
 		result.ErrorCode = "401000"
@@ -327,6 +328,7 @@ func Verify_Token(w http.ResponseWriter, r *http.Request) {
 	result.Payload["session_hash"] = sessionHash
 	result.Payload["username"] = userData.Username
 	result.Payload["full_name"] = userData.FullName
+	result.Payload["role"] = userData.Role
 	result.Payload["data"] = userData.Data
 
 	utils.Response(w, result)
