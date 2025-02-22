@@ -14,6 +14,9 @@ export DBHOST=localhost
 export DBUSER=user
 export DBPASS=pass
 export DBNAME=simple
+export RDHOST=localhost:6379
+export RDPASS=qwerqwer
+export RDDB=0
 
 
 
