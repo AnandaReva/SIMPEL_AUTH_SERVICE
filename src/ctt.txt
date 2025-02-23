@@ -5,7 +5,7 @@ set DBHOST=localhost
 set DBUSER=revaananda
 set DBPASS=qwerqwer
 set DBPORT=5432
-set DBNAME=simple
+set DBNAME=simpel
 
 
 //linux
@@ -13,11 +13,18 @@ export DBDRIVER=postgres
 export DBHOST=localhost
 export DBUSER=user
 export DBPASS=pass
-export DBNAME=simple
+export DBNAME=simpel
 export RDHOST=localhost:6379
 export RDPASS=qwerqwer
 export RDDB=0
 
+
+
+export SMTPSERVER=smtp.gmail.com
+export SMTPPORT=587
+export SMTPUSER=your_email
+export SMTPPASS=your_password
+export SMTPFROM=namadepannamabelakang1781945@gmail.com
 
 
 ### Langkah-langkah Login dengan Verifikasi Token

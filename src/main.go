@@ -1,72 +1,35 @@
 package main
 
 import (
+	//"auth_service/configs"
 	"auth_service/db"
 	"auth_service/handlers"
 	"auth_service/logger"
-	"auth_service/utils"
 
-	"context"
+	//	"auth_service/mail"
+	"auth_service/middlewares"
+	"auth_service/rds"
+
+	//"fmt"
+
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 )
 
-func generateReferenceID(timer int64) string {
+// func generateReferenceID(timer int64) string {
 
-	timeBase36 := strconv.FormatUint(uint64(timer), 36)
-	randString, err := utils.RandomStringGenerator(8)
-	if err != "" {
-		randString = "12345678"
-	}
+// 	timeBase36 := strconv.FormatUint(uint64(timer), 36)
+// 	randString, err := utils.RandomStringGenerator(8)
+// 	if err != nil {
+// 		randString = "12345678"
+// 	}
 
-	reference_id := timeBase36 + "." + randString // concate
+// 	reference_id := timeBase36 + "." + randString // concate
 
-	return reference_id
+// 	return reference_id
 
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow all origins
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		// Allow only GET and POST methods
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		// Allow only JSON content
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == http.MethodOptions {
-			// If preflight request, return 204 No Content
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		start := time.Now()
-		requestID := generateReferenceID(start.UnixNano())
-
-		// Log request details
-		logger.Info(requestID, "Handle Request Started: ", r.Method, " ", r.URL.Path)
-		logger.Info(requestID, "Query String: ", r.URL.RawQuery)
-		logger.Info(requestID, "Headers:")
-		for name, values := range r.Header {
-			for _, value := range values {
-				logger.Debug(requestID, name, ": ", value)
-			}
-		}
-
-		// Add request ID to context ,
-		// !!! note : context key is like mini state-management
-		ctx := context.WithValue(r.Context(), handlers.HTTPContextKey("requestID"), requestID)
-		next.ServeHTTP(w, r.WithContext(ctx))
-
-		// Log completion and duration
-		duration := time.Since(start)
-		logger.Info(requestID, " Handle Request Completed in: ", duration)
-		logger.Info(requestID, " ----------------------------------------------")
-
-	})
-}
+// }
 
 func main() {
 	// ENDPOINTS
@@ -111,6 +74,7 @@ func main() {
 		logger.Error("DBPASS environment variable is required")
 	}
 
+	logger.Info("MAIN", "-----------POSTGRESQL CONF : ")
 	logger.Info("MAIN", "DBDRIVER : ", DBDRIVER)
 	logger.Info("MAIN", "DBHOST : ", DBHOST)
 	logger.Info("MAIN", "DBPORT : ", DBPORT)
@@ -127,12 +91,112 @@ func main() {
 		logger.Info("MAIN", "Database Connection Pool Initated.")
 	}
 
+	logger.Info("MAIN", "-----------REDIS CONF : ")
+	// log redis conf
+	RDHOST := os.Getenv("RDHOST")
+	RDPASS := os.Getenv("RDPASS")
+	RDDB, errConv := strconv.Atoi(os.Getenv("RDDB"))
+
+	if len(RDHOST) == 0 {
+		logger.Error("RDHOST environment variable is required")
+	}
+
+	if len(RDPASS) == 0 {
+		logger.Warning("RDPASS environment variable is required")
+	}
+
+	if errConv != nil {
+		logger.Warning("MAIN", "Failed to parse RDDB, using default (0), reason: ", errConv)
+		RDDB = 0 // Default to 0 if parsing fails
+	}
+
+	logger.Info("MAIN", "RDHOST : ", RDHOST)
+	logger.Info("MAIN", "RDPASS : ", RDPASS)
+	logger.Info("MAIN", "RDDB : ", RDDB)
+
+	///////////////////////////////// POSTGRESQL ///////////////////////////////
+	err = db.InitDB(DBDRIVER, DBHOST, DBPORT, DBUSER, DBPASS, DBNAME, DBPOOLSIZE)
+	if err != nil {
+		logger.Error("MAIN", "ERROR !!! FAILED TO INITIATE DB POOL..", err)
+		os.Exit(1)
+	} else {
+		logger.Info("MAIN", "Database Connection Pool Initated.")
+	}
+
+	///////////////////////////////// REDIS ///////////////////////////////
+	// Inisialisasi Redis hanya di main
+
+	if err := rds.InitRedisConn(RDHOST, RDPASS, RDDB); err != nil {
+		logger.Error("MAIN", "ERROR - Redis connection failed:", err)
+		os.Exit(1)
+	}
+
+	///////////////////////////////// SMTP ///////////////////////////////
+	logger.Info("MAIN", "-----------SMTP CONF : ")
+
+	SMTPSERVER := os.Getenv("SMTPSERVER")
+	SMTPPORT := os.Getenv("SMTPPORT")
+	SMTPUSER := os.Getenv("SMTPUSER")
+	SMTPPASS := os.Getenv("SMTPPASS")
+	SMTPFROM := os.Getenv("SMTPFROM")
+
+	logger.Info("MAIN", "SMTPSERVER : ", SMTPSERVER)
+	logger.Info("MAIN", "SMTPPORT : ", SMTPPORT)
+	logger.Info("MAIN", "SMTPUSER : ", SMTPUSER)
+	logger.Info("MAIN", "SMTPPASS : ", SMTPPASS)
+	logger.Info("MAIN", "SMTPFROM : ", SMTPFROM)
+
+	if len(SMTPSERVER) == 0 {
+		logger.Error("SMTPSERVER environment variable is required")
+	}
+
+	if len(SMTPPORT) == 0 {
+		logger.Error("SMTPPORT environment variable is required")
+	}
+
+	if len(SMTPUSER) == 0 {
+		logger.Error("SMPTPUSER environment variable is required")
+	}
+
+	if len(SMTPPASS) == 0 {
+		logger.Error("SMPTPPASS environment variable is required")
+	}
+
+	if len(SMTPFROM) == 0 {
+		logger.Error("SMTPFROM environment variable is required")
+	}
+
+	// Ambil email dari environment
+	testEmail := SMTPUSER
+
+	if testEmail == "" {
+		logger.Error("MAIN", "SMTPUSER is not set in environment variables")
+		os.Exit(1)
+	}
+
+	// Uji kirim email ke diri sendiri
+
+	// testMessage := fmt.Sprintf("This is a test SMTP email \n service: %s  \n version: %s", configs.GetAppName(), configs.GetVersion())
+	// err = mail.SendEmail(testEmail, "Test Email", testMessage)
+	// if err != nil {
+	// 	logger.Error("MAIN", "ERROR - Failed to send test email:", err)
+	// 	os.Exit(1)
+	// }
+
+	// if err != nil {
+
+	// 	logger.Error("MAIN", "ERROR - Failed to send email:", err)
+	// 	os.Exit(1)
+
+	// }
+
 	paths["/"] = handlers.Greeting
 	// send requestID and db conn as parameter
 	paths["/login"] = handlers.Login
 	paths["/register"] = handlers.Register
 	paths["/logout"] = handlers.Logout
 	paths["/verify-token"] = handlers.Verify_Token
+	paths["/verify-otp"] = handlers.Reg_Verify_OTP
 
 	// Register endpoints with a multiplexer
 	mux := http.NewServeMux()
@@ -143,7 +207,7 @@ func main() {
 	// Start server
 	port := ":5000"
 	logger.Info("INFO", "Starting server on http://localhost", port)
-	if err := http.ListenAndServe(port, corsMiddleware(mux)); err != nil {
+	if err := http.ListenAndServe(port, middlewares.CorsMiddleware(mux)); err != nil {
 		logger.Error("MAIN", "Server failed: ", err)
 	}
 }

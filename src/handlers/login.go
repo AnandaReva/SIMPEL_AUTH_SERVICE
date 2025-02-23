@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -62,12 +63,12 @@ Foreign-key constraints:
 */
 
 // GenerateNonce membuat nonce acak sepanjang 8 byte
-func GenerateNonce() (string, string) {
+func GenerateNonce() (string, error) {
 	nonce, err := utils.RandomStringGenerator(8)
-	if err != "" {
-		return "", "Failed to generate nonce"
+	if err != nil {
+		return "", errors.New("failed to generate nonce")
 	}
-	return nonce, ""
+	return nonce, nil
 }
 
 type UserCred struct {
@@ -162,7 +163,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	fullNonce := halfNonce + halfNonce2
 	token, errTkn := crypto.GenerateHMAC(userCred.SaltedPassword, fullNonce)
 
-	if errHNC2 != "" || errTkn != "" {
+	if errHNC2 != nil || errTkn != nil {
 		logger.Error(referenceID, "ERROR - Login - GenerateNonce or GenerateHMAC token failed generation failed", errTkn, errHNC2)
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
@@ -276,7 +277,7 @@ func Verify_Token(w http.ResponseWriter, r *http.Request) {
 
 	// Generate session ID and session hash
 	sessionID, errMsg := utils.RandomStringGenerator(16)
-	if errMsg != "" {
+	if errMsg != nil {
 		logger.Error(referenceID, "ERROR - VerifyToken - Session ID generation failed")
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
@@ -285,7 +286,7 @@ func Verify_Token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionHash, errMsg := crypto.GenerateHMAC(tokenClient, sessionID)
-	if errMsg != "" {
+	if errMsg != nil {
 		logger.Error(referenceID, "ERROR - VerifyToken - HMAC computation failed")
 		result.ErrorCode = "500000"
 		result.ErrorMessage = "Internal server error"
