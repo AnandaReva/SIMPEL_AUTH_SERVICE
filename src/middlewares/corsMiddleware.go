@@ -11,17 +11,13 @@ import (
 )
 
 func generateReferenceID(timer int64) string {
-
 	timeBase36 := strconv.FormatUint(uint64(timer), 36)
 	randString, err := utils.RandomStringGenerator(8)
 	if err != nil {
 		randString = "12345678"
 	}
-
 	reference_id := timeBase36 + "." + randString // concate
-
 	return reference_id
-
 }
 
 func CorsMiddleware(next http.Handler) http.Handler {
@@ -32,13 +28,11 @@ func CorsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		// Allow only JSON content
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
 		if r.Method == http.MethodOptions {
 			// If preflight request, return 204 No Content
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-
 		start := time.Now()
 		requestID := generateReferenceID(start.UnixNano())
 
@@ -56,7 +50,6 @@ func CorsMiddleware(next http.Handler) http.Handler {
 		// !!! note : context key is like mini state-management
 		ctx := context.WithValue(r.Context(), handlers.HTTPContextKey("requestID"), requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
-
 		// Log completion and duration
 		duration := time.Since(start)
 		logger.Info(requestID, " Handle Request Completed in: ", duration)

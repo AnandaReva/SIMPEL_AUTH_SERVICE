@@ -196,7 +196,9 @@ func main() {
 	paths["/register"] = handlers.Register
 	paths["/logout"] = handlers.Logout
 	paths["/verify-token"] = handlers.Verify_Token
-	paths["/verify-otp"] = handlers.Reg_Verify_OTP
+	paths["/register/verify-otp"] = handlers.Register_Verify_OTP
+	paths["/reset-password"] = handlers.Reset_Password
+	paths["/reset-password/verify-otp"] = handlers.Reset_Password_Verify_OTP
 
 	// Register endpoints with a multiplexer
 	mux := http.NewServeMux()

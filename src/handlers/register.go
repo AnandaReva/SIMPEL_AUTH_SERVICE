@@ -7,7 +7,6 @@ import (
 	"auth_service/logger"
 	"auth_service/mail"
 	"auth_service/rds"
-	"strconv"
 	"strings"
 
 	"auth_service/utils"
@@ -83,6 +82,26 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	conn, err := db.GetConnection()
+	if err != nil {
+		logger.Error(referenceID, "ERROR - Register - Failed to get DB connection: ", err)
+		result.ErrorCode = "500002"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	// cek apakah email atau username sudah ada
+	var existingField string
+	queryCheck := `SELECT CASE WHEN EXISTS (SELECT 1 FROM sysuser."user" WHERE username = $1) THEN 'username' WHEN EXISTS (SELECT 1 FROM sysuser."user" WHERE email = $2) THEN 'email' ELSE NULL END AS existing_field;`
+	errCheck := conn.Get(&existingField, queryCheck, username, email)
+	if errCheck == nil && existingField != "" {
+		result.ErrorCode = "409001"
+		result.ErrorMessage = fmt.Sprintf("%s already exists", existingField)
+		utils.Response(w, result)
+		return
+	}
+
 	redisClient := rds.GetRedisClient()
 	if redisClient == nil {
 		logger.Error(referenceID, "ERROR - Register - Redis client is not initialized")
@@ -118,26 +137,9 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := db.GetConnection()
-	if err != nil {
-		logger.Error(referenceID, "ERROR - Register - Failed to get DB connection: ", err)
-		result.ErrorCode = "500002"
-		result.ErrorMessage = "Internal server error"
-		utils.Response(w, result)
-		return
-	}
+	otpInt, err := utils.RandoNnumberGenerator(6)
+	otp := fmt.Sprintf("%06d", otpInt) // Pastikan selalu 6 digit dengan padding nol jika perlu
 
-	var existingField string
-	queryCheck := `SELECT CASE WHEN EXISTS (SELECT 1 FROM sysuser."user" WHERE username = $1) THEN 'username' WHEN EXISTS (SELECT 1 FROM sysuser."user" WHERE email = $2) THEN 'email' ELSE NULL END AS existing_field;`
-	errCheck := conn.Get(&existingField, queryCheck, username, email)
-	if errCheck == nil && existingField != "" {
-		result.ErrorCode = "409001"
-		result.ErrorMessage = fmt.Sprintf("%s already exists", existingField)
-		utils.Response(w, result)
-		return
-	}
-
-	otp, err := utils.RandoNnumberGenerator(6)
 	if err != nil {
 		logger.Error(referenceID, "ERROR - Register - Failed to generate OTP: ", err)
 		result.ErrorCode = "500001"
@@ -147,11 +149,11 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.Info(referenceID, "INFO - Register - OTP generated: ", otp)
 
-	message := fmt.Sprintf("%s|%s|%s|%s", username, email, password, fullName)
+	message := fmt.Sprintf("%s|%s|%s|%s", email, fullName, password, username)
 	logger.Info(referenceID, "INFO - Register - message: ", message)
 	logger.Info(referenceID, "INFO - Register - key (otp): ", otp)
 
-	otpSignature, err := crypto.GenerateHMAC(message, strconv.Itoa(otp))
+	otpSignature, err := crypto.GenerateHMAC(message, otp)
 	if err != nil {
 		logger.Error(referenceID, "ERROR - Register - Failed to generate OTP signature: ", err)
 		result.ErrorCode = "500003"
@@ -175,7 +177,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send OTP via SMTP
-	err = mail.SendEmail(email, "OTP Verification", fmt.Sprintf("Your OTP is: %d\nThis will expire in %.0f seconds.", otp, expiry.Seconds()))
+	err = mail.SendEmail(email, "OTP Verification", fmt.Sprintf("Your OTP is: %s\nThis will expire in %.0f seconds.", otp, expiry.Seconds()))
+
 	if err != nil {
 		logger.Error(referenceID, "ERROR - Register - Failed to send OTP via email: ", err)
 		result.ErrorCode = "500005"
@@ -184,6 +187,11 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// count OTPExpireTstamp
+	OTPExpireTstamp := time.Now().Unix() + int64(configs.GetOTPExpireTime())
+	logger.Info(referenceID, "INFO - Register - calculated OTPExpireTstamp: ", OTPExpireTstamp)
+
+	result.Payload["otp_expire_tstamp"] = OTPExpireTstamp
 	result.Payload["status"] = "success"
 
 	utils.Response(w, result)
@@ -193,7 +201,7 @@ func Register(w http.ResponseWriter, r *http.Request) {
 //  otp_signature = hmac-sha256( message , otp)
 // key:value =>    username:{otp_signature+ message}
 
-func Reg_Verify_OTP(w http.ResponseWriter, r *http.Request) {
+func Register_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 	var ctxKey HTTPContextKey = "requestID"
 	referenceID, _ := r.Context().Value(ctxKey).(string)
 	if referenceID == "" {
@@ -213,6 +221,9 @@ func Reg_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	param, _ := utils.Request(r)
+
+	logger.Info(referenceID, "INFO - Reg_Verify_OTP - params: ", param)
+
 	otpSignature, _ := param["otp_signature"].(string)
 
 	if otpSignature == "" {
@@ -250,10 +261,10 @@ func Reg_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := parts[0]
-	email := parts[1]
+	email := parts[0]
+	fullName := parts[1]
 	password := parts[2]
-	fullName := parts[3]
+	username := parts[3]
 
 	logger.Info(referenceID, "INFO - Reg_Verify_OTP - username: ", username)
 	logger.Info(referenceID, "INFO - Reg_Verify_OTP - email: ", email)
@@ -282,9 +293,10 @@ func Reg_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 		utils.Response(w, result)
 		return
 	}
+	logger.Info(referenceID, "INFO - Reg_Verify_OTP - New user ID: ", newUserId)
 
 	redisClient.Del(context.Background(), redisKey)
 
-	result.Payload["user_id"] = newUserId
+	result.Payload["success"] = "success"
 	utils.Response(w, result)
 }

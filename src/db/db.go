@@ -1,11 +1,14 @@
 package db
 
 import (
+	"auth_service/logger"
 	"errors"
 	"fmt"
-	"auth_service/logger"
+	"os"
+	"strconv"
 	"sync"
 	"time"
+
 	_ "github.com/go-sql-driver/mysql" // MySQL driver (imported only for its side-effect)
 	"github.com/jmoiron/sqlx"          // SQLx for database handling
 	_ "github.com/lib/pq"              // PostgreSQL driver (imported only for its side-effect)
@@ -13,10 +16,10 @@ import (
 
 // DBPool struct represents the connection pool for database connections.
 type DBPool struct {
-	db       *sqlx.DB  // SQLx database instance for connections
-	count    int       // Active connection count in the pool
+	db       *sqlx.DB   // SQLx database instance for connections
+	count    int        // Active connection count in the pool
 	mutex    sync.Mutex // Mutex to ensure safe concurrent access to the pool
-	poolSize int       // Maximum number of connections allowed in the pool
+	poolSize int        // Maximum number of connections allowed in the pool
 }
 
 // Global variable for the database pool
@@ -31,14 +34,34 @@ func GetConnection() (*sqlx.DB, error) {
 
 	// Check if the pool has reached its maximum size
 	if dbpool.count >= dbpool.poolSize {
-		// If no connection is available, return an error
-		dbpool.count = dbpool.poolSize
-		return nil, errors.New("no connection available in pool")
-	} else {
-		// Increment active connection count and return the available connection
-		dbpool.count++
-		return dbpool.db, nil
+		logger.Error("DB", "ERROR - No connection available in pool, trying to reinitialize...")
+
+		// Reinitialize the database pool
+
+		DBDRIVER := os.Getenv("DBDRIVER")
+		DBNAME := os.Getenv("DBNAME")
+		DBHOST := os.Getenv("DBHOST")
+		DBUSER := os.Getenv("DBUSER")
+		DBPASS := os.Getenv("DBPASS")
+		DBPORT, errPort := strconv.Atoi(os.Getenv("DBPORT"))
+		DBPOOLSIZE, err := strconv.Atoi(os.Getenv("DBPOOLSIZE"))
+		if err != nil {
+			logger.Warning("MAIN", "Failed to parse DBPOOLSIZE, using default (20)", errPort)
+			DBPOOLSIZE = 20 // Default to 20 if parsing fails
+		}
+
+		errInit := InitDB(DBDRIVER, DBHOST, DBPORT, DBUSER, DBPASS, DBNAME, DBPOOLSIZE)
+		if err != nil {
+			logger.Error("DB", "Failed to reinitialize DB pool", errInit)
+			return nil, errors.New("failed to reinitialize database connection")
+		}
+
+		logger.Info("DB", "Database Connection Pool Reinitialized.")
 	}
+
+	// Increment active connection count and return the available connection
+	dbpool.count++
+	return dbpool.db, nil
 }
 
 // ReleaseConnection releases a database connection back to the pool.
@@ -64,8 +87,8 @@ func InitDB(driver string, host string, port int, user string, password string, 
 	var err error
 
 	// Create the connection string using the provided parameters
-//	connStr := fmt.Sprintf("%s://%s:%s@%s:%d/%s", driver, user, password, host, port, dbname)
-connStr := fmt.Sprintf("%s://%s:%s@%s:%d/%s?sslmode=disable", driver, user, password, host, port, dbname)
+	//	connStr := fmt.Sprintf("%s://%s:%s@%s:%d/%s", driver, user, password, host, port, dbname)
+	connStr := fmt.Sprintf("%s://%s:%s@%s:%d/%s?sslmode=disable", driver, user, password, host, port, dbname)
 	// Log the connection string for debugging (ensure this does not log sensitive info in production)
 	logger.Debug("DB", "CONNSTR : ", connStr)
 
