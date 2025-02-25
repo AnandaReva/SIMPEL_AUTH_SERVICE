@@ -45,6 +45,8 @@ func Register(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
+	logger.Info(referenceID, "INFO - Register - params: ", param)
+
 	// Validasi input
 	username, ok := param["username"].(string)
 	if !ok || username == "" || len(username) < 6 {
@@ -111,9 +113,10 @@ func Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ttl, err := utils.OTPRateLimiter(redisClient, email); err != nil {
+	ttl, err := utils.SendMailLimiter(redisClient, referenceID, email, "Registration OTP", time.Duration(configs.GetOTPExpireTime())*time.Second)
+	if err != nil {
 		logger.Error(referenceID, "ERROR - Register - ", err)
-		result.ErrorCode = "429002"
+		result.ErrorCode = "429001"
 		result.ErrorMessage = fmt.Sprintf("%s. Please try again in %d seconds", err.Error(), int(ttl.Seconds()))
 		utils.Response(w, result)
 		return
@@ -272,7 +275,7 @@ func Register_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 	logger.Info(referenceID, "INFO - Reg_Verify_OTP - full_name: ", fullName)
 
 	salt, _ := utils.RandomStringGenerator(16)
-	saltedPassword, _ := crypto.GeneratePBKDF2(password, salt, 32, 5000)
+	saltedPassword, _ := crypto.GeneratePBKDF2(password, salt, 32, configs.GetPBKDF2Iterations())
 
 	conn, err := db.GetConnection()
 	if err != nil {

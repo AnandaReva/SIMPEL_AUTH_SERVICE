@@ -2,6 +2,7 @@ package main
 
 import (
 	//"auth_service/configs"
+
 	"auth_service/db"
 	"auth_service/handlers"
 	"auth_service/logger"
@@ -176,19 +177,19 @@ func main() {
 
 	// Uji kirim email ke diri sendiri
 
-	// testMessage := fmt.Sprintf("This is a test SMTP email \n service: %s  \n version: %s", configs.GetAppName(), configs.GetVersion())
-	// err = mail.SendEmail(testEmail, "Test Email", testMessage)
-	// if err != nil {
-	// 	logger.Error("MAIN", "ERROR - Failed to send test email:", err)
-	// 	os.Exit(1)
-	// }
+	/* testMessage := fmt.Sprintf("This is a test SMTP email \n service: %s  \n version: %s", configs.GetAppName(), configs.GetVersion())
+	err = mail.SendEmail(testEmail, "Test Email", testMessage)
+	if err != nil {
+		logger.Error("MAIN", "ERROR - Failed to send test email:", err)
+		os.Exit(1)
+	}
 
-	// if err != nil {
+	if err != nil {
 
-	// 	logger.Error("MAIN", "ERROR - Failed to send email:", err)
-	// 	os.Exit(1)
+		logger.Error("MAIN", "ERROR - Failed to send email:", err)
+		os.Exit(1)
 
-	// }
+	} */
 
 	paths["/"] = handlers.Greeting
 	// send requestID and db conn as parameter
@@ -198,7 +199,7 @@ func main() {
 	paths["/verify-token"] = handlers.Verify_Token
 	paths["/register/verify-otp"] = handlers.Register_Verify_OTP
 	paths["/reset-password"] = handlers.Reset_Password
-	paths["/reset-password/verify-otp"] = handlers.Reset_Password_Verify_OTP
+	paths["/reset-password/verify-url"] = handlers.Reset_Password_Verify_URL
 
 	// Register endpoints with a multiplexer
 	mux := http.NewServeMux()

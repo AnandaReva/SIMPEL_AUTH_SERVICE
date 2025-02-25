@@ -9,16 +9,23 @@ import (
 	"auth_service/rds"
 	"auth_service/utils"
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"time"
 )
 
+// !NOTE : reset password procedure
+/*	1. Client send request for reset password with email
+2. Server check if email is exist in database , if exist, generate url with signature as param and send it via email
+3. Client receive email and click the link, then user will be redirected to reset password page fill new password and send it back to server
+4. Server check if signature is valid and not expired, then update password in database
 
+
+
+*/
 
 func Reset_Password(w http.ResponseWriter, r *http.Request) {
-
-
 	var ctxKey HTTPContextKey = "requestID"
 	referenceID, _ := r.Context().Value(ctxKey).(string)
 	if referenceID == "" {
@@ -39,8 +46,10 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
-	email, _ := param["email"].(string)
-	if email == "" {
+	logger.Info(referenceID, "INFO - ResetPassword - params: ", param)
+
+	email, ok := param["email"].(string)
+	if !ok || email == "" {
 		logger.Error(referenceID, "ERROR - Reset_Password - Missing email")
 		result.ErrorCode = "400001"
 		result.ErrorMessage = "Invalid request"
@@ -48,19 +57,23 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
-	nonce, _ := param["nonce"].(string)
-
-	if nonce == "" {
-		logger.Error(referenceID, "ERROR - Reset_Password - Missing nonce")
-		result.ErrorCode = "400002"
-		result.ErrorMessage = "Invalid request"
+	redisClient := rds.GetRedisClient()
+	if redisClient == nil {
+		logger.Error(referenceID, "ERROR - ResetPassword - Redis client is not initialized")
+		result.ErrorCode = "500003"
+		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
 		return
 	}
 
-
-	// Cek apakah email sudah terdaftar
+	if ttl, err := utils.SendMailLimiter(redisClient, referenceID, email, "Reset Password", time.Duration(configs.GetOTPExpireTime())*time.Second); err != nil {
+		logger.Error(referenceID, "ERROR - Reset_Password - ", err)
+		result.ErrorCode = "429001"
+		result.ErrorMessage = fmt.Sprintf("%s. Please try again in %d seconds", err.Error(), int(ttl.Seconds()))
+		result.Payload["remaining_time"] = int(ttl.Seconds())
+		utils.Response(w, result)
+		return
+	}
 
 	conn, err := db.GetConnection()
 	if err != nil {
@@ -71,121 +84,79 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// cek apakah email terdaftar ada
 	var emailFromDb string
-	queryCheck := `SELECT email FROM sysuser."user" WHERE email = $1`
-	errCheck := conn.Get(&emailFromDb, queryCheck,  email)
-	if errCheck != nil  {
-		result.ErrorCode = "409001"
-		result.ErrorMessage = ""
+	err = conn.QueryRow(`SELECT email FROM sysuser."user" WHERE email = $1`, email).Scan(&emailFromDb)
+	if err == sql.ErrNoRows {
+		result.ErrorCode = "401001"
+		result.ErrorMessage = "Unauthorized"
 		utils.Response(w, result)
 		return
-	}
-
-	//jika ada kirim OTP ke email
-	redisClient := rds.GetRedisClient()
-	if redisClient == nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - Redis client is not initialized")
+	} else if err != nil {
+		logger.Error(referenceID, "ERROR - ResetPassword - Query failed: ", err)
 		result.ErrorCode = "500002"
-		result.ErrorMessage = "Internal Server Error"
+		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
 		return
 	}
 
-	if ttl, err := utils.OTPRateLimiter(redisClient, email); err != nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - ", err)
-		result.ErrorCode = "429002"
-		result.ErrorMessage = fmt.Sprintf("%s. Please try again in %d seconds", err.Error(), int(ttl.Seconds()))
-		utils.Response(w, result)
-		return
-	}
-
-	// Cek apakah email ini sudah memiliki OTP yang valid
-	redisKey := fmt.Sprintf("otp_active:%s", email)
-	exists, err := redisClient.Exists(context.Background(), redisKey).Result()
+	nonce, err := utils.RandomStringGenerator(8)
 	if err != nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - Failed to check Redis: ", err)
-		result.ErrorCode = "500003"
-		result.ErrorMessage = "Internal Server Error"
-		utils.Response(w, result)
-		return
-	}
-
-	if exists > 0 {
-		result.ErrorCode = "429001"
-		result.ErrorMessage = "OTP already sent. Please wait before requesting again."
-		utils.Response(w, result)
-		return
-	}
-
-	otpInt, err := utils.RandoNnumberGenerator(6)
-	otp := fmt.Sprintf("%06d", otpInt) // Pastikan selalu 6 digit dengan padding nol jika perlu
-
-	if err != nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - Failed to generate OTP: ", err)
-		result.ErrorCode = "500001"
-		result.ErrorMessage = "Internal Server Error"
-		utils.Response(w, result)
-		return
-	}
-	logger.Info(referenceID, "INFO - Reset_Password - OTP generated: ", otp)
-
-	message := fmt.Sprintf("%s|%s", nonce, email)
-	logger.Info(referenceID, "INFO - Reset_Password - message: ", message)
-	logger.Info(referenceID, "INFO - Reset_Password - key (otp): ", otp)
-
-	otpSignature, err := crypto.GenerateHMAC(message, otp)
-	if err != nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - Failed to generate OTP signature: ", err)
-		result.ErrorCode = "500003"
-		result.ErrorMessage = "Internal Server Error"
-		utils.Response(w, result)
-		return
-
-	}
-
-	logger.Info(referenceID, "INFO - Reset_Password - OTP signature: ", otpSignature)
-
-	redisOTPKey := fmt.Sprintf("otp_signature:%s", otpSignature)
-
-	expiry := time.Duration(configs.GetOTPExpireTime()) * time.Second
-	if err := redisClient.Set(context.Background(), redisOTPKey, message, expiry).Err(); err != nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - Failed to store OTP in Redis: ", err)
-		result.ErrorCode = "500004"
-		result.ErrorMessage = "Internal Server Error"
-		utils.Response(w, result)
-		return
-	}
-
-	// Send OTP via SMTP
-	err = mail.SendEmail(email, "OTP Verification for Reset Password", fmt.Sprintf("Your OTP is: %s\nThis will expire in %.0f seconds.", otp, expiry.Seconds()))
-
-	if err != nil {
-		logger.Error(referenceID, "ERROR - Reset_Password - Failed to send OTP via email: ", err)
+		logger.Error(referenceID, "ERROR - ResetPassword - Failed to generate nonce: ", err)
 		result.ErrorCode = "500005"
-		result.ErrorMessage = "Internal Server Error"
+		result.ErrorMessage = "Internal server error"
 		utils.Response(w, result)
 		return
 	}
 
-	// count OTPExpireTstamp
-	OTPExpireTstamp := time.Now().Unix() + int64(configs.GetOTPExpireTime())
-	logger.Info(referenceID, "INFO - Reset_Password - calculated OTPExpireTstamp: ", OTPExpireTstamp)
+	URLExpireTstamp := time.Now().Unix() + int64(configs.GetResetPassExpTime())
+	message := fmt.Sprintf("%d|%s", URLExpireTstamp, email)
+	urlSignature, err := crypto.GenerateHMAC(message, nonce)
+	if err != nil {
+		logger.Error(referenceID, "ERROR - ResetPassword - Failed to generate URL signature: ", err)
+		result.ErrorCode = "500006"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
 
-	result.Payload["otp_expire_tstamp"] = OTPExpireTstamp
+	logger.Info(referenceID, "INFO - ResetPassword - URL expire timestamp: ", URLExpireTstamp)
+	logger.Info(referenceID, "INFO - ResetPassword - nonce (key): ", nonce)
+	logger.Info(referenceID, "INFO - ResetPassword - message: ", message)
+
+	logger.Info(referenceID, "INFO - ResetPassword - URL signature: ", urlSignature)
+
+	expiry := time.Duration(configs.GetResetPassExpTime()) * time.Second
+	if err := redisClient.Set(context.Background(), fmt.Sprintf("url_signature:%s", urlSignature), message, expiry).Err(); err != nil {
+		logger.Error(referenceID, "ERROR - ResetPassword - Failed to store URL in Redis: ", err)
+		result.ErrorCode = "500007"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	logger.Info(referenceID, "INFO - ResetPassword - expire time: ", expiry)
+
+	// susun url
+	//  clent get nonce from last 8 character of urlSignature
+
+	clientURL := fmt.Sprintf("%s/reset-password-confirm/%s", configs.GetClientURL(), urlSignature+nonce)
+
+	logger.Info(referenceID, "INFO - ResetPassword - clientURL: ", clientURL)
+
+	err = mail.SendEmail(email, "Reset Password Request", fmt.Sprintf("Your Reset Password URL: %s\nThis will expire in %.0f minutes.", clientURL, expiry.Minutes()))
+	if err != nil {
+		logger.Error(referenceID, "ERROR - ResetPassword - Failed to send email: ", err)
+		result.ErrorCode = "500008"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
 	result.Payload["status"] = "success"
-
 	utils.Response(w, result)
-	
-
-
-
 }
 
-
-
-func Reset_Password_Verify_OTP(w http.ResponseWriter, r *http.Request) {
-
+func Reset_Password_Verify_URL(w http.ResponseWriter, r *http.Request) {
 	var ctxKey HTTPContextKey = "requestID"
 	referenceID, _ := r.Context().Value(ctxKey).(string)
 	if referenceID == "" {
@@ -195,7 +166,7 @@ func Reset_Password_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
-		logger.Debug(referenceID, "DEBUG - Reset_Password_Verify_OTP - Execution completed in ", duration)
+		logger.Debug(referenceID, "DEBUG - Reset_Password_Verify_URL - Execution completed in ", duration)
 	}()
 
 	result := utils.ResultFormat{
@@ -206,17 +177,77 @@ func Reset_Password_Verify_OTP(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
-	email, _ := param["otp_signature"].(string)
-	if email == "" {
-		logger.Error(referenceID, "ERROR - Reset_Password_Verify_OTP - Missing email")
+	logger.Info(referenceID, "INFO - Reset_Password_Verify_URL - params: ", param)
+
+	newPassword, ok := param["new_password"].(string)
+	if !ok || newPassword == "" || len(newPassword) < 8 || len(newPassword) > 30 {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Missing or invalid new password")
 		result.ErrorCode = "400001"
 		result.ErrorMessage = "Invalid request"
 		utils.Response(w, result)
 		return
 	}
 
+	urlSignature, ok := param["url_signature"].(string)
+	if !ok || urlSignature == "" {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Missing url_signature")
+		result.ErrorCode = "400002"
+		result.ErrorMessage = "Invalid request"
+		utils.Response(w, result)
+		return
+	}
 
+	redisClient := rds.GetRedisClient()
+	if redisClient == nil {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Redis client is not initialized")
+		result.ErrorCode = "500001"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
 
+	signatureKey := fmt.Sprintf("url_signature:%s", urlSignature)
+	storedMessage, err := redisClient.Get(context.Background(), signatureKey).Result()
+	if err != nil {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Invalid or expired signature")
+		result.ErrorCode = "401002"
+		result.ErrorMessage = "Unauthorized"
+		utils.Response(w, result)
+		return
+	}
 
+	var expireTstamp int64
+	var email string
+	fmt.Sscanf(storedMessage, "%d|%s", &expireTstamp, &email)
+	if time.Now().Unix() > expireTstamp {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Reset link expired")
+		result.ErrorCode = "410001"
+		result.ErrorMessage = "Gone"
+		utils.Response(w, result)
+		return
+	}
 
+	conn, err := db.GetConnection()
+	if err != nil {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Failed to get DB connection: ", err)
+		result.ErrorCode = "500002"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	salt, _ := utils.RandomStringGenerator(16)
+	hashedPassword, _ := crypto.GeneratePBKDF2(newPassword, salt, 32, configs.GetPBKDF2Iterations())
+	_, err = conn.Exec(`UPDATE sysuser."user" SET saltedpassword = $1, salt = $2 WHERE email = $3`, hashedPassword, salt, email)
+	if err != nil {
+		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Failed to update password: ", err)
+		result.ErrorCode = "500003"
+		result.ErrorMessage = "Internal server error"
+		utils.Response(w, result)
+		return
+	}
+
+	redisClient.Del(context.Background(), signatureKey)
+	result.Payload["status"] = "success"
+	utils.Response(w, result)
 }

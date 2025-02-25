@@ -2,5 +2,5 @@
 
 *.yaml
 
-/ .ctt.txt
+/ctt.txt
 
