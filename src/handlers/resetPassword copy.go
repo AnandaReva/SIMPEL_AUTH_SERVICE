@@ -12,6 +12,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,10 +22,45 @@ import (
 2. Server check if email is exist in database , if exist, generate url with signature as param and send it via email
 3. Client receive email and click the link, then user will be redirected to reset password page fill new password and send it back to server
 4. Server check if signature is valid and not expired, then update password in database
-
-
-
 */
+
+/* Modifikasi Rule Encoding Expiry
+Ambil epoch time & konversi ke string
+➜ Contoh: 1708890000
+Ganti hanya digit pada indeks genap dengan huruf:
+0 → k, 2 → b, 4 → d, 6 → f, 8 → h
+Hasil: 1h0h8b9k0k0k
+Sisipkan ke dalam urlSignature secara acak (misalnya setelah 5 karakter pertama).
+*/
+
+// Mapping angka ke huruf hanya untuk index genap
+var numToChar = map[rune]string{
+	'0': "k", '2': "b", '4': "d", '6': "f", '8': "h",
+}
+
+// Fungsi Encode & Inject Expiry dalam Signature
+func encodeAndInjectExpiry(signature string, epoch int64) string {
+	// Encode expiry
+	strEpoch := strconv.FormatInt(epoch, 10)
+	var encoded strings.Builder
+	for i, ch := range strEpoch {
+		if i%2 == 0 { // Ubah hanya indeks genap
+			if mapped, exists := numToChar[ch]; exists {
+				encoded.WriteString(mapped)
+			} else {
+				encoded.WriteRune(ch)
+			}
+		} else {
+			encoded.WriteRune(ch)
+		}
+	}
+
+	encodedExpiry := encoded.String()
+
+	// Inject expiry ke signature di posisi tetap setelah karakter ke-5
+	insertPos := 5
+	return signature[:insertPos] + encodedExpiry + signature[insertPos:]
+}
 
 func Reset_Password(w http.ResponseWriter, r *http.Request) {
 	var ctxKey HTTPContextKey = "requestID"
@@ -45,7 +82,6 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 	}
 
 	param, _ := utils.Request(r)
-
 	logger.Info(referenceID, "INFO - ResetPassword - params: ", param)
 
 	email, ok := param["email"].(string)
@@ -85,7 +121,7 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var emailFromDb string
-	err = conn.QueryRow(`SELECT email FROM sysuser."user" WHERE email = $1`, email).Scan(&emailFromDb)
+	err = conn.QueryRow(`SELECT email FROM sysuser.user WHERE email = $1`, email).Scan(&emailFromDb)
 	if err == sql.ErrNoRows {
 		result.ErrorCode = "401001"
 		result.ErrorMessage = "Unauthorized"
@@ -119,14 +155,17 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Encode & Inject expiry ke dalam signature
+	finalSignature := encodeAndInjectExpiry(urlSignature, URLExpireTstamp)
+
 	logger.Info(referenceID, "INFO - ResetPassword - URL expire timestamp: ", URLExpireTstamp)
 	logger.Info(referenceID, "INFO - ResetPassword - nonce (key): ", nonce)
 	logger.Info(referenceID, "INFO - ResetPassword - message: ", message)
-
 	logger.Info(referenceID, "INFO - ResetPassword - URL signature: ", urlSignature)
+	logger.Info(referenceID, "INFO - ResetPassword - Final Signature: ", finalSignature)
 
 	expiry := time.Duration(configs.GetResetPassExpTime()) * time.Second
-	if err := redisClient.Set(context.Background(), fmt.Sprintf("url_signature:%s", urlSignature), message, expiry).Err(); err != nil {
+	if err := redisClient.Set(context.Background(), fmt.Sprintf("url_signature:%s", finalSignature), message, expiry).Err(); err != nil {
 		logger.Error(referenceID, "ERROR - ResetPassword - Failed to store URL in Redis: ", err)
 		result.ErrorCode = "500007"
 		result.ErrorMessage = "Internal server error"
@@ -136,10 +175,8 @@ func Reset_Password(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info(referenceID, "INFO - ResetPassword - expire time: ", expiry)
 
-	// susun url
-	//  clent get nonce from last 8 character of urlSignature
-
-	clientURL := fmt.Sprintf("%s/reset-password-confirm/%s", configs.GetClientURL(), urlSignature+nonce)
+	// Susun URL dengan signature + nonce
+	clientURL := fmt.Sprintf("%s/reset-password-confirm/%s", configs.GetClientURL(), finalSignature+nonce)
 
 	logger.Info(referenceID, "INFO - ResetPassword - clientURL: ", clientURL)
 
@@ -188,6 +225,9 @@ func Reset_Password_Verify_URL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//b71619a3b2ff744719f22fcd20dae490f9e4f898bd7ae72faa60377fb9827ac2
+	//b71619a3b2ff744719f22fcd20dae490f9e4f898bd7ae72faa60377fb9827ac2
+
 	urlSignature, ok := param["url_signature"].(string)
 	if !ok || urlSignature == "" {
 		logger.Error(referenceID, "ERROR - Reset_Password_Verify_URL - Missing url_signature")
@@ -196,6 +236,8 @@ func Reset_Password_Verify_URL(w http.ResponseWriter, r *http.Request) {
 		utils.Response(w, result)
 		return
 	}
+
+	logger.Info(referenceID, "INFO - Reset_Password_Verify_URL - url_signature from client: ", urlSignature)
 
 	redisClient := rds.GetRedisClient()
 	if redisClient == nil {

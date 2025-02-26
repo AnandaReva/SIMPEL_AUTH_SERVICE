@@ -1,7 +1,7 @@
 package configs
 
 var otpExpireTime int16 = 180    //s
-var resetPassExpTime int16 = 600 //s
+var resetPassExpTime int16 = 300 //s
 var PBKDF2Iterations int = 15000
 var clientURL string = "http://localhost:3000"
 
@@ -18,6 +18,6 @@ func GetPBKDF2Iterations() int {
 	return PBKDF2Iterations
 }
 
-func GetClientURL() string { 
+func GetClientURL() string {
 	return clientURL
 }
