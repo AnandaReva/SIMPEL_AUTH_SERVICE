@@ -1,6 +1,6 @@
 package configs
 
-var version string = "0.0.8"
+var version string = "0.0.9"
 var appName string = "AUTH_SERVICE"
 
 func GetVersion() string {

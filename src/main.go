@@ -177,19 +177,19 @@ func main() {
 
 	// Uji kirim email ke diri sendiri
 
-	/* testMessage := fmt.Sprintf("This is a test SMTP email \n service: %s  \n version: %s", configs.GetAppName(), configs.GetVersion())
-	err = mail.SendEmail(testEmail, "Test Email", testMessage)
-	if err != nil {
-		logger.Error("MAIN", "ERROR - Failed to send test email:", err)
-		os.Exit(1)
-	}
+	// testMessage := fmt.Sprintf("This is a test SMTP email \n service: %s  \n version: %s", configs.GetAppName(), configs.GetVersion())
+	// err = mail.SendEmail(testEmail, "Test Email", testMessage)
+	// if err != nil {
+	// 	logger.Error("MAIN", "ERROR - Failed to send test email:", err)
+	// 	os.Exit(1)
+	// }
 
-	if err != nil {
+	// if err != nil {
 
-		logger.Error("MAIN", "ERROR - Failed to send email:", err)
-		os.Exit(1)
+	// 	logger.Error("MAIN", "ERROR - Failed to send email:", err)
+	// 	os.Exit(1)
 
-	} */
+	// }
 
 	paths["/"] = handlers.Greeting
 	// send requestID and db conn as parameter
