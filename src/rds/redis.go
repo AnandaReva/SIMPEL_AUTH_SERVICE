@@ -4,17 +4,20 @@ import (
 	"auth_service/logger"
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
 )
 
-/* !!NOTE : Ther should be only one redis client */ 
+/* !!NOTE : Ther should be only one redis client */
 
 var (
 	RedisClient *redis.Client
 	redisMu     sync.Mutex
 )
+
 // InitRedisConn menginisialisasi Redis client
 func InitRedisConn(host, pass string, db int) error {
 	redisMu.Lock()
@@ -51,6 +54,20 @@ func GetRedisClient() *redis.Client {
 		return nil
 	}
 
+	RDHOST := os.Getenv("RDHOST")
+	RDPASS := os.Getenv("RDPASS")
+	RDDB, errConv := strconv.Atoi(os.Getenv("RDDB"))
+	if errConv != nil {
+		logger.Warning("MAIN", "Failed to parse RDDB, using default (0)", errConv)
+		RDDB = 0 // Default to 20 if parsing fails
+	}
+
+	errInit := InitRedisConn( RDHOST, RDPASS, RDDB)
+	if errInit != nil {
+		logger.Error("REDIS", "Failed to initialize Redis client", errInit)
+		return nil
+	}
+
 	if _, err := RedisClient.Ping(context.Background()).Result(); err != nil {
 		logger.Error("REDIS", "ERROR - Redis connection lost. Reconnecting...")
 		RedisClient.Close()
@@ -59,6 +76,3 @@ func GetRedisClient() *redis.Client {
 
 	return RedisClient
 }
-
-
-
