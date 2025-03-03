@@ -51,21 +51,20 @@ func GetRedisClient() *redis.Client {
 
 	if RedisClient == nil {
 		logger.Error("REDIS", "ERROR - Redis client is not initialized")
-		return nil
-	}
 
-	RDHOST := os.Getenv("RDHOST")
-	RDPASS := os.Getenv("RDPASS")
-	RDDB, errConv := strconv.Atoi(os.Getenv("RDDB"))
-	if errConv != nil {
-		logger.Warning("MAIN", "Failed to parse RDDB, using default (0)", errConv)
-		RDDB = 0 // Default to 20 if parsing fails
-	}
+		// Inisialisasi ulang Redis,
+		DHOST := os.Getenv("RDHOST")
+		RDPASS := os.Getenv("RDPASS")
+		RDDB, errConv := strconv.Atoi(os.Getenv("RDDB"))
+		if errConv != nil {
+			logger.Error("REDIS", fmt.Sprintf("ERROR - Failed to convert RDDB: %v", errConv))
+			return nil
+		}
 
-	errInit := InitRedisConn( RDHOST, RDPASS, RDDB)
-	if errInit != nil {
-		logger.Error("REDIS", "Failed to initialize Redis client", errInit)
-		return nil
+		if err := InitRedisConn(DHOST, RDPASS, RDDB); err != nil {
+			logger.Error("REDIS", fmt.Sprintf("ERROR - Failed to reconnect to Redis: %v", err))
+			return nil
+		}
 	}
 
 	if _, err := RedisClient.Ping(context.Background()).Result(); err != nil {

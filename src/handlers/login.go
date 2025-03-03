@@ -112,7 +112,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	param, _ := utils.Request(r)
 
-	userData, ok := param["userData"].(string)
+	userData, ok := param["user_data"].(string)
 	if !ok || userData == "" {
 		logger.Error(referenceID, "ERROR - Login - Missing userData")
 		result.ErrorCode = "400001"
